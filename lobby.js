@@ -23,7 +23,7 @@ class Lobby {
             height_map: 4000,
             matchDuration: MINUTE*10,
             matchStartTime: null,
-            matchEnded: false,а
+            matchEnded: false,
         };
         this.walls = [];
         this.backgroundStars = [];
