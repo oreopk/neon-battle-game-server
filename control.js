@@ -59,6 +59,7 @@ function shoot(player, angle, state, playerId, broadcast, bulletCount, speed=100
             y: bullet.y,
             radius: bullet.radius,
             angle: bullet.angle,
+            speed: bullet.speed,
             color: player.color,
             playerId: bullet.playerId,
             balls_count: player.balls_count,

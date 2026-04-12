@@ -176,7 +176,7 @@ wss.on('connection', (ws) => {
                 playerId, 
                 (message) => ws.currentLobby.broadcast(message), 
                 1,
-                50,
+                150,
                 0.2,
                 30,
                 100,
