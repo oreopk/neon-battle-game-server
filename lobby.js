@@ -151,6 +151,7 @@ class Lobby {
         const maxDistanceX = 10000;
         const maxDistanceY = 10000;
         let lastRespawnCheck = 0;
+        let lastRemainingTime = -1;
         setInterval(() => {
             if (!this.state.matchStartTime) {
                 this.state.matchStartTime = Date.now();
@@ -169,6 +170,7 @@ class Lobby {
 
             objects.updateBots(this.state);
 
+            const bulletUpdates = [];
             for (let index = 0; index < this.state.bullets.length; index++) {
                 const bullet = this.state.bullets[index];
                 bullet.velocityX += Math.cos(bullet.angle) * bullet.acceleration;
@@ -195,7 +197,6 @@ class Lobby {
 
                 if (Math.abs(bullet.x) > maxDistanceX || Math.abs(bullet.y) > maxDistanceY) {
                     this.state.bullets.splice(index, 1);
-
                     this.broadcast(msgpack.encode({
                         type: 'removeBullet',
                         bulletId: bullet.bulletId,
@@ -204,14 +205,26 @@ class Lobby {
                     continue;
                 }
 
+                bulletUpdates.push({
+                    id: bullet.bulletId,
+                    x: Math.round(bullet.x),
+                    y: Math.round(bullet.y),
+                    p: bullet.playerId
+                });
+              };
+
+            // Все пули одним сообщением вместо N отдельных
+            if (bulletUpdates.length > 0) {
                 this.broadcast(msgpack.encode({
-                    type: 'bulletUpdate',
-                    bulletId: bullet.bulletId,
-                    x: bullet.x,
-                    y: bullet.y,
-                    playerId: bullet.playerId
+                    type: 'bulletsUpdate',
+                    b: bulletUpdates
+                    // type: 'bulletUpdate',
+                    // bulletId: bullet.bulletId,
+                    // x: bullet.x,
+                    // y: bullet.y,
+                    // playerId: bullet.playerId
                 }));
-            };
+            }
 
             for (const id in this.state.activePlayers) {
                 const player = this.state.activePlayers[id];
@@ -234,18 +247,40 @@ class Lobby {
                  collision.checkWallCollisions(player, this.walls)
             };
 
+            // Только поля которые реально нужны фронтенду каждый тик
             const existingPlayers = Object.keys(this.state.activePlayers).map(id => {
-                const { intervals, movement, ...cleanPlayer } = this.state.activePlayers[id];
+                // const { intervals, movement, ...cleanPlayer } = this.state.activePlayers[id];
+                const p = this.state.activePlayers[id];
                 return {
                     playerId: id,
-                    player: cleanPlayer
+                    // player: cleanPlayer
+                    player: {
+                        x: Math.round(p.x),
+                        y: Math.round(p.y),
+                        angle: p.angle,
+                        name: p.name,
+                        shieldActive: p.shieldActive,
+                        currentShootMode: p.currentShootMode,
+                        balls_count: p.balls_count,
+                        isBot: p.isBot,
+                        shootAngle: p.shootAngle,
+                    }
                 };
             });
-            this.broadcast(msgpack.encode({
-                type: 'update',
-                activePlayers: existingPlayers,
-                remainingTime: Math.max(0, Math.floor((this.state.matchDuration - elapsedTime) / 1000))
-            }));
+
+            const remaining = Math.max(0, Math.floor((this.state.matchDuration - elapsedTime) / 1000));
+            const updateMsg = { type: 'update', activePlayers: existingPlayers };
+            // remainingTime шлём только когда изменился (раз в секунду)
+            if (remaining !== lastRemainingTime) {
+                updateMsg.remainingTime = remaining;
+                lastRemainingTime = remaining;
+            }
+            this.broadcast(msgpack.encode(updateMsg));
+            // this.broadcast(msgpack.encode({
+            //     type: 'update',
+            //     activePlayers: existingPlayers,
+            //     remainingTime: Math.max(0, Math.floor((this.state.matchDuration - elapsedTime) / 1000))
+            // }));
 
         }, 16);
     }
