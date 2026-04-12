@@ -5,7 +5,7 @@ const msgpack = require('@msgpack/msgpack');
 const {LobbyManager } = require('./lobby.js');
 
 const wss = connect.wss;
-const PORT = 8080;
+const PORT = 8081;
 
 connect.server.listen(PORT, '0.0.0.0', () => {
     console.log(`Сервер запущен на http://localhost:${PORT}`);

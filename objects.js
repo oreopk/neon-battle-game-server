@@ -40,7 +40,7 @@ function createPlayerData(playerId, isBot = false) {
         kills: 0,
         deaths: 0,
         isShooting:false,
-        currentShootMode:'shoot',
+        currentShootMode:'shoot1',
         shield_on:false, // пока не используется на беке
         canShootAuto: true,
         lastShootTime:0, // Время последнего выстрела
