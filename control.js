@@ -54,16 +54,16 @@ function shoot(player, angle, state, playerId, broadcast, bulletCount, speed=100
 
         broadcast(msgpack.encode({
             type: 'bullet',
-            bulletId: bullet.bulletId,
+            bid: bullet.bulletId,  // bulletId
             x: bullet.x,
             y: bullet.y,
             radius: bullet.radius,
             angle: bullet.angle,
             speed: bullet.speed,
             color: player.color,
-            playerId: bullet.playerId,
-            balls_count: player.balls_count,
-            shoot_type: type
+            pid: bullet.playerId,  // playerId
+            bc: player.balls_count,// balls_count
+            st: type               // shoot_type
         }));
     }
 }

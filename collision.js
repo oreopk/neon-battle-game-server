@@ -74,9 +74,9 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
 
                 broadcast(msgpack.encode({
                     type: 'removeBullet',
-                    bulletId: bullet.bulletId,
+                    bid: bullet.bulletId, // bulletId
                     angle: bullet.angle,
-                    ishit: true,
+                    ih: true,             // ishit
                 }));
                 state.bullets.splice(index, 1);
                 return true

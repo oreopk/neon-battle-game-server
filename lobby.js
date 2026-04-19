@@ -103,39 +103,61 @@ class Lobby {
         this.backgroundStars.push(...background_generate);
     }
 
-    addClient(ws, playerId = null) {
+    addClient(ws, playerId) {
         if (this.clients.size >= this.maxPlayers){
             console.log('Лобби переполненно');
         }
 
-        ws.playerData = objects.addPlayer(this.state, playerId, false, this.walls, this.state.width_map, this.state.height_map);
-
-        this.clients.add(ws);
+        ws.playerId = playerId;
         ws.lobbyId = this.id;
+        this.clients.add(ws);
 
-        this.state.allPlayersLobby[playerId] = ws.playerData;
-        this.state.activePlayers[playerId] = ws.playerData;
+        // Отменяем отложенное удаление если игрок переподключился
+        if (this.disconnectTimeouts && this.disconnectTimeouts[playerId]) {
+            clearTimeout(this.disconnectTimeouts[playerId]);
+            delete this.disconnectTimeouts[playerId];
+        }
+
+        const isReconnect = !!this.state.allPlayersLobby[playerId];
+
+        if (isReconnect) {
+            // Восстанавливаем старого игрока
+            ws.playerData = this.state.allPlayersLobby[playerId];
+            this.state.activePlayers[playerId] = ws.playerData;
+            console.log('Игрок ' + playerId + ' переподключился');
+        } else {
+            ws.playerData = objects.addPlayer(this.state, playerId, false, this.walls, this.state.width_map, this.state.height_map);
+            this.state.allPlayersLobby[playerId] = ws.playerData;
+            this.state.activePlayers[playerId] = ws.playerData;
+            console.log('Игрок ' + playerId + ' Вошел на сервер: ' + ws.lobbyId);
+        }
 
         ws.send(msgpack.encode({
             type: 'init',
             lobbyId: this.id,
-            playerId: ws.playerId,
+            playerId: playerId,
             player: ws.playerData,
             walls: this.walls,
             background: this.backgroundStars,
             width: this.state.width_map,
             height: this.state.height_map,
-            lobbyId: this.id,
+            isReconnect: isReconnect,
         }));
 
         objects.check_new_player(this.state, (msg) => this.broadcast(msg));
-        console.log('Игрок '+ ws.playerId + ' Вошел на сервер: '+ ws.lobbyId);
     }
 
     removeClient(ws) {
         if (ws.playerId) {
             delete this.state.activePlayers[ws.playerId];
-            delete this.state.allPlayersLobby[ws.playerId];
+
+            // Даём 30 секунд на реконнект — только потом удаляем игрока
+            this.disconnectTimeouts = this.disconnectTimeouts || {};
+            const pid = ws.playerId;
+            this.disconnectTimeouts[pid] = setTimeout(() => {
+                delete this.state.allPlayersLobby[pid];
+                delete this.disconnectTimeouts[pid];
+            }, 30000);
 
             this.broadcast(msgpack.encode({
                 type: 'removePlayer',
@@ -199,7 +221,7 @@ class Lobby {
                     this.state.bullets.splice(index, 1);
                     this.broadcast(msgpack.encode({
                         type: 'removeBullet',
-                        bulletId: bullet.bulletId,
+                        bid: bullet.bulletId,
                         angle: bullet.angle,
                     }));
                     continue;
@@ -249,30 +271,27 @@ class Lobby {
 
             // Только поля которые реально нужны фронтенду каждый тик
             const existingPlayers = Object.keys(this.state.activePlayers).map(id => {
-                // const { intervals, movement, ...cleanPlayer } = this.state.activePlayers[id];
                 const p = this.state.activePlayers[id];
                 return {
-                    playerId: id,
-                    // player: cleanPlayer
-                    player: {
+                    pid: id,       // playerId
+                    p: {           // player
                         x: Math.round(p.x),
                         y: Math.round(p.y),
-                        angle: p.angle,
-                        name: p.name,
-                        shieldActive: p.shieldActive,
-                        currentShootMode: p.currentShootMode,
-                        balls_count: p.balls_count,
-                        isBot: p.isBot,
-                        shootAngle: p.shootAngle,
+                        a: p.angle,            // angle
+                        n: p.name,             // name
+                        sa: p.shieldActive,    // shieldActive
+                        sm: p.currentShootMode,// currentShootMode
+                        bc: p.balls_count,     // balls_count
+                        bot: p.isBot,          // isBot
+                        sA: p.shootAngle,      // shootAngle
                     }
                 };
             });
 
             const remaining = Math.max(0, Math.floor((this.state.matchDuration - elapsedTime) / 1000));
-            const updateMsg = { type: 'update', activePlayers: existingPlayers };
-            // remainingTime шлём только когда изменился (раз в секунду)
+            const updateMsg = { type: 'update', ap: existingPlayers }; // ap = activePlayers
             if (remaining !== lastRemainingTime) {
-                updateMsg.remainingTime = remaining;
+                updateMsg.rt = remaining; // rt = remainingTime
                 lastRemainingTime = remaining;
             }
             this.broadcast(msgpack.encode(updateMsg));

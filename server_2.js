@@ -13,25 +13,45 @@ connect.server.listen(PORT, '0.0.0.0', () => {
 
 const lobbyManager = new LobbyManager();
 
+// token → playerId, чтобы при реконнекте восстановить того же игрока
+const sessionTokens = new Map();
 
 wss.on('connection', (ws) => {
     console.log('Новое подключение');
 
-    const playerId = Math.random().toString(36).substring(7);
-    ws.playerId = playerId;
+    let player;
+    let currentState;
+    let playerId;
 
-    const defaultLobby = lobbyManager.getLobby('lobby_0');
+    // Ждём первое сообщение hello с токеном сессии
+    ws.once('message', (firstMessage) => {
+        const hello = msgpack.decode(firstMessage);
 
-    defaultLobby.addClient(ws, playerId);
+        if (hello.type === 'hello' && hello.token) {
+            if (sessionTokens.has(hello.token)) {
+                playerId = sessionTokens.get(hello.token);
+            } else {
+                playerId = Math.random().toString(36).substring(7);
+                sessionTokens.set(hello.token, playerId);
+            }
+        } else {
+            playerId = Math.random().toString(36).substring(7);
+        }
 
-    ws.currentLobby = defaultLobby;
+        ws.playerId = playerId;
 
-    let player = ws.currentLobby.state.activePlayers[playerId];
-    let currentState = ws.currentLobby.state;
-    player.lastUpdate = Date.now();
+        const defaultLobby = lobbyManager.getLobby('lobby_0');
+        defaultLobby.addClient(ws, playerId);
+        ws.currentLobby = defaultLobby;
+
+        player = ws.currentLobby.state.activePlayers[playerId];
+        currentState = ws.currentLobby.state;
+       if (player) player.lastUpdate = Date.now();
+    });
 
     ws.on('message', (message) => {
         const data = msgpack.decode(message);
+        if (data.type === 'hello') return; // уже обработан в once
 
         if (!ws.currentLobby) return;
 
@@ -119,6 +139,11 @@ wss.on('connection', (ws) => {
             if (currentState.activePlayers[data.playerid]) {
                 currentState.activePlayers[data.playerid].shieldActive = false;
             }
+        }
+
+        if (data.type === 'ping') {
+            ws.send(msgpack.encode({ type: 'pong', t: data.t }));
+            return;
         }
 
         if (data.type === 'regist' && player) {
