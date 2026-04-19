@@ -11,9 +11,9 @@ function shoot(player, angle, state, playerId, broadcast, bulletCount, speed=100
     player.lastShootTime = currentTime;
     broadcast(msgpack.encode({
             type: 'canShoot',
-            playerId: playerId,
-            nameProperty: abilityPropertyName,
-            canShoot: player[abilityPropertyName],
+            pid: playerId,                        // playerId
+            np: abilityPropertyName,              // nameProperty
+            cs: player[abilityPropertyName],      // canShoot
             shootCooldown: shootCooldown,
             lastShootTime: player.lastShootTime
     }));

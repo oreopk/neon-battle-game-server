@@ -62,11 +62,16 @@ class Lobby {
     handlePlayerChange(playerId, key, oldValue, newValue) {
         if (key === 'kills' ||  key === 'deaths' ||  key === 'added' ||  key === 'deleted' ||   key === 'name') {
             const leaderboardPlayers = Object.values(this.state.allPlayersLobby)
-                .map(({ intervals, movement, ...cleanPlayer }) => cleanPlayer);
+                .map(p => ({
+                    n: p.name,    // name
+                    k: p.kills,   // kills
+                    d: p.deaths,  // deaths
+                    c: p.color,   // color
+                }));
 
             this.broadcast(msgpack.encode({
                 type: 'liderBoard_Update',
-                players: leaderboardPlayers
+                ps: leaderboardPlayers // players
             }));
         }
     }
@@ -161,7 +166,7 @@ class Lobby {
 
             this.broadcast(msgpack.encode({
                 type: 'removePlayer',
-                playerId: ws.playerId
+                pid: ws.playerId // playerId
             }));
         }
         this.clients.delete(ws);

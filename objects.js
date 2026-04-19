@@ -124,6 +124,35 @@ function add_bot(state, walls, width_wall, height_wall, lobby, lobbyManager) {
     };
 }
 
+function add_static_bot(state, walls, width_wall, height_wall, lobby, lobbyManager) {
+    const playerId = Math.random().toString(36).substring(7) + "__STATIC_BOT";
+    const bot = addPlayer(state, playerId, true, walls, width_wall, height_wall);
+    if (!bot) return;
+    bot.lobbyId = lobby.id;
+    bot.isStatic = true;      // не двигается
+    bot.velocityX = 0;
+    bot.velocityY = 0;
+    bot.acceleration = 0;
+    bot.intervals = {
+        shooting: setInterval(() => {
+            if (state.activePlayers[playerId]) {
+                const bot = state.activePlayers[playerId];
+                const nearestEnemy = functions.findNearestEnemy(bot, state.activePlayers);
+                if (nearestEnemy) {
+                    turnBotShootTowardsEnemy(bot, nearestEnemy);
+                    const currentLobby = lobbyManager.getLobby(bot.lobbyId);
+                    if (currentLobby) {
+                        control.shoot(bot, bot.shootAngle, state, playerId, (message) => currentLobby.broadcast(message), 1, 100, 0, 10, 10, 800, false);
+                    }
+                }
+            } else {
+                clearInterval(bot.intervals.shooting);
+            }
+        }, 100)
+        // движения нет — стоит на месте
+    };
+}
+
 function turnBotShootTowardsEnemy(bot, enemy) {
     if (!enemy) return;
 
@@ -141,7 +170,8 @@ function updateBots(state) {
     for (const id in state.activePlayers) {
         const bot = state.activePlayers[id];
         if (!bot.isBot) continue;
-        
+        if (bot.isStatic) continue; // статичный бот не двигается
+
         bot.velocityX += Math.cos(bot.angle) * bot.acceleration;
         bot.velocityY += Math.sin(bot.angle) * bot.acceleration;
 
@@ -156,15 +186,23 @@ function updateBots(state) {
 
 function check_new_player(state, broadcast){
     const existingPlayers = Object.keys(state.activePlayers).map(id => {
-        const { intervals, movement, ...cleanPlayer } = state.activePlayers[id];
+        const p = state.activePlayers[id];
         return {
-            playerId: id,
-            player: cleanPlayer
+            pid: id,  // playerId
+            p: {      // player
+                x: p.x,
+                y: p.y,
+                radius: p.radius,
+                color: p.color,
+                speed: p.speed,
+                health: p.health,
+                balls_count: p.balls_count,
+            }
         };
     });
     broadcast(msgpack.encode({
         type: 'existingPlayers',
-        activePlayers: existingPlayers
+        ap: existingPlayers // activePlayers
     }));
 }
 
@@ -173,6 +211,7 @@ module.exports = {
     createPlayerData,
     respawnPlayer,
     add_bot,
+    add_static_bot,
     updateBots,
     check_new_player
 };

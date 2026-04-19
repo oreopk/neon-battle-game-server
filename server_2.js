@@ -46,7 +46,7 @@ wss.on('connection', (ws) => {
 
         player = ws.currentLobby.state.activePlayers[playerId];
         currentState = ws.currentLobby.state;
-       if (player) player.lastUpdate = Date.now();
+        if (player) player.lastUpdate = Date.now();
     });
 
     ws.on('message', (message) => {
@@ -149,15 +149,25 @@ wss.on('connection', (ws) => {
         if (data.type === 'regist' && player) {
             currentState.activePlayers[playerId].name = data.name;
             const leaderboardPlayers = Object.values(ws.currentLobby.state.allPlayersLobby)
-                .map(({ intervals, movement, ...cleanPlayer }) => cleanPlayer);
+                .map(p => ({
+                    n: p.name,   // name
+                    k: p.kills,  // kills
+                    d: p.deaths, // deaths
+                    c: p.color,  // color
+                }));
             ws.currentLobby.broadcast(msgpack.encode({
                 type: 'liderBoard_Update',
-                players: leaderboardPlayers
+                ps: leaderboardPlayers // players
             }));
         }
 
         if (data.type === 'add_bot') {
             objects.add_bot(currentState, ws.currentLobby.walls, currentState.width_map, currentState.height_map, ws.currentLobby, lobbyManager);
+            objects.check_new_player(currentState, (msg) => ws.currentLobby.broadcast(msg));
+        }
+
+        if (data.type === 'add_static_bot') {
+            objects.add_static_bot(currentState, ws.currentLobby.walls, currentState.width_map, currentState.height_map, ws.currentLobby, lobbyManager);
             objects.check_new_player(currentState, (msg) => ws.currentLobby.broadcast(msg));
         }
 

@@ -10,7 +10,23 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
             const player = state.activePlayers[id];
             if (id == bullet.playerId) continue
 
-            if (physics.lineCircleIntersection(startX, startY, endX, endY, player.x, player.y, player.radius, bullet.radius)) {
+            const shieldRadius = player.radius + 18; // чуть больше радиуса игрока
+            const hitRadius = player.shieldActive ? shieldRadius : player.radius;
+
+            if (physics.lineCircleIntersection(startX, startY, endX, endY, player.x, player.y, hitRadius, bullet.radius)) {
+
+                // Щит поглощает пулю — урона нет
+                if (player.shieldActive) {
+                    broadcast(msgpack.encode({
+                        type: 'removeBullet',
+                        bid: bullet.bulletId,
+                        angle: bullet.angle,
+                        ih: true,
+                    }));
+                    state.bullets.splice(index, 1);
+                    return true;
+                }
+
                 if (player.health - bullet.damage <= 0) {
                     let killed = 'none';
                     let killerName = 'none';
@@ -27,11 +43,10 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
 
                     broadcast(msgpack.encode({
                         type: 'playerDeath',
-                        playerId: id,
-                        killed: killed,
-                        bulletId: bullet.playerId,
-                        killerName: killerName,
-                        bulletangle: bullet.angle,
+                        pid: id,             // playerId
+                        kd: killed,          // killed
+                        kn: killerName,      // killerName
+                        ba: bullet.angle,    // bulletangle
                     }));
 
                     broadcast(msgpack.encode({
@@ -39,14 +54,12 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
                         x: player.x,
                         y: player.y,
                         angle: bullet.angle,
-                        color: player.color
+                        c: player.color      // color
                     }));
 
                     broadcast(msgpack.encode({
-                        bullet_id: bullet.playerId,
-                        player_id: id,
                         type: 'removePlayer',
-                        playerId: id
+                        pid: id              // playerId
                     }));
                     delete state.activePlayers[id];
                     player.deathTime=Date.now();
@@ -61,14 +74,13 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
                         x: player.x,
                         y: player.y,
                         angle: bullet.angle,
-                        color: player.color
+                        c: player.color      // color
                     }));
 
                     broadcast(msgpack.encode({
                         type: 'updateHealth',
-                        playerId: id,
-                        health: player.health,
-                        bullet: bullet,
+                        pid: id,             // playerId
+                        hp: player.health,   // health
                     }));
                 }
 
@@ -103,11 +115,11 @@ function checkCollisions(state, bullet, index, walls, broadcast) {
             state.bullets.splice(index, 1);
             broadcast(msgpack.encode({
                 type: 'removeBullet',
-                bulletId: bullet.bulletId,
-                bulletX: intersection.point.x,
-                bulletY: intersection.point.y,
+                bid: bullet.bulletId, // bulletId
+                bx: intersection.point.x, // bulletX
+                by: intersection.point.y, // bulletY
                 angle: newAngle,
-                ishit: false,
+                ih: false,            // ishit
             }));
             return true;
         }
