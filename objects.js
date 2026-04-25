@@ -74,6 +74,8 @@ function respawnPlayer(playerId,state,walls,width_wall,height_wall,broadcast) {
     player.reload = 0;
     player.shieldActive = false;
     player.isShooting = false;
+    player.velocityX = 0;
+    player.velocityY = 0;
 
     const position = functions.getRandomPosition(player.radius, walls, width_wall, height_wall);
 

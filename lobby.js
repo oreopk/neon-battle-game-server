@@ -95,7 +95,7 @@ class Lobby {
     }
 
     initWalls() {
-        
+
         this.walls = [
             {id: -4, x: 0, y: 0, width: 20, height: this.state.height_map},
             {id: -3, x: this.state.width_map - 20, y: 0, width: 20, height: this.state.height_map},
@@ -104,6 +104,9 @@ class Lobby {
         ];
 
         this.walls.push(...walls_functions.generateRandomWalls(4000, 4000, 40))
+        // wallIdCounter должен начинаться выше максимального ID сгенерированных стен,
+        // иначе вручную добавленные стены получат ID, конфликтующий с генерёнными.
+        this.state.wallIdCounter = this.walls.reduce((max, w) => Math.max(max, w.id), -1) + 1;
         const background_generate = functions.generatePerlinNoiseStars(this.state.width_map, this.state.height_map, 300, 0.5, 3);
         this.backgroundStars.push(...background_generate);
     }

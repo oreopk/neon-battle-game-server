@@ -69,6 +69,8 @@ function shoot(player, angle, state, playerId, broadcast, bulletCount, speed=100
 }
 
 function move(player, data, state) {
+    if (!state.activePlayers[player.playerId]) return; // игрок мёртв — не двигаем
+
     const now = Date.now();
 
     if (now - player.lastUpdate >= 16) {
