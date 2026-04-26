@@ -288,9 +288,11 @@ class Lobby {
     const BLACKHOLE_SWIRL_PLAYER = 0.55;
     const BLACKHOLE_FALLOFF      = 1500;       // дистанция «полной» силы
     // Радиус, в пределах которого стены полностью испаряются. Растёт
-    // линейно со strength: 0 → 0 px, 1 → 800 px. Граничные стены карты
-    // (id<0) не трогаем — иначе игроков выкидывает за пределы мира.
-    const BLACKHOLE_WALL_EAT_RADIUS_MAX = 800;
+    // линейно со strength: 0 → 0 px, 1 → 1600 px. Сама дыра визуально
+    // распухает примерно до этого размера на максимуме, поэтому стены
+    // под визуальным телом дыры тоже должны попасть в зону. Граничные
+    // стены карты (id<0) не трогаем — иначе игроков выкидывает за мир.
+    const BLACKHOLE_WALL_EAT_RADIUS_MAX = 1600;
     const BLACKHOLE_WALL_EAT_INTERVAL_MS = 500;
 
     setInterval(() => {
@@ -337,7 +339,7 @@ class Lobby {
         lastWallEatCheck = Date.now();
         const eatRadius = bhStrength * BLACKHOLE_WALL_EAT_RADIUS_MAX;
         const eatRadiusSq = eatRadius * eatRadius;
-        let removedAny = false;
+        const eaten = [];
         for (let i = this.walls.length - 1; i >= 0; i--) {
           const w = this.walls[i];
           // Боковые границы карты (id < 0) не трогаем — на них держится мир.
@@ -349,11 +351,31 @@ class Lobby {
           const dx = bhCx - closestX;
           const dy = bhCy - closestY;
           if (dx * dx + dy * dy <= eatRadiusSq) {
+            // Сохраняем геометрию стены до удаления — клиент по этим данным
+            // нарисует взрыв в её цвете и в её позиции. Цвет на стенах
+            // вычисляется на клиенте через neonColors[indexInArray], поэтому
+            // достаточно прислать id — клиент сам найдёт стену в state.walls
+            // (он ещё не получил updateWalls), возьмёт её индекс и цвет.
+            eaten.push({
+              id: w.id,
+              x: w.x,
+              y: w.y,
+              w: w.width,
+              h: w.height,
+            });
             this.walls.splice(i, 1);
-            removedAny = true;
           }
         }
-        if (removedAny) {
+        if (eaten.length) {
+          // Порядок важен: сначала событие взрыва (пока state.walls на
+          // клиенте ещё содержит эти стены и можно достать цвет по id),
+          // потом обновлённый список стен.
+          this.broadcast(
+            msgpack.encode({
+              type: 'wallsEaten',
+              walls: eaten,
+            }),
+          );
           this.broadcast(
             msgpack.encode({
               type: 'updateWalls',
