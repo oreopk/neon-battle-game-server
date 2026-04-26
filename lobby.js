@@ -107,7 +107,11 @@ class Lobby {
         // wallIdCounter должен начинаться выше максимального ID сгенерированных стен,
         // иначе вручную добавленные стены получат ID, конфликтующий с генерёнными.
         this.state.wallIdCounter = this.walls.reduce((max, w) => Math.max(max, w.id), -1) + 1;
-        const background_generate = functions.generatePerlinNoiseStars(this.state.width_map, this.state.height_map, 300, 0.5, 3);
+        // Звёздный фон в 4 раза больше карты — чтобы перекрывал всё поле
+        // и оставался виден когда камера у края.
+        this.bgWidth = this.state.width_map * 4;
+        this.bgHeight = this.state.height_map * 4;
+        const background_generate = functions.generatePerlinNoiseStars(this.bgWidth, this.bgHeight, 1800, 0.3, 2);
         this.backgroundStars.push(...background_generate);
     }
 
@@ -147,6 +151,8 @@ class Lobby {
             player: ws.playerData,
             walls: this.walls,
             background: this.backgroundStars,
+            bgWidth: this.bgWidth,
+            bgHeight: this.bgHeight,
             width: this.state.width_map,
             height: this.state.height_map,
             isReconnect: isReconnect,
@@ -267,6 +273,19 @@ class Lobby {
                         player.reload = 0;
                     }
                 }
+
+                // Энергия: щит быстро дренит (после задержки появления),
+                // иначе медленная регенерация.
+                const SHIELD_APPEAR_DELAY_MS = 300;
+                if (player.shieldActive && Date.now() - player.lastShieldActivateTime >= SHIELD_APPEAR_DELAY_MS) {
+                    player.energy -= 2;
+                    if (player.energy <= 0) {
+                        player.energy = 0;
+                        player.shieldActive = false;
+                    }
+                } else if (!player.shieldActive && player.energy < player.maxEnergy) {
+                    player.energy = Math.min(player.maxEnergy, player.energy + 0.5);
+                }
                     
                 player.velocityX *= player.friction;
                 player.velocityY *= player.friction;
@@ -292,6 +311,7 @@ class Lobby {
                         bc: p.balls_count,     // balls_count
                         bot: p.isBot,          // isBot
                         sA: p.shootAngle,      // shootAngle
+                        e: Math.round(p.energy), // energy
                     }
                 };
             });

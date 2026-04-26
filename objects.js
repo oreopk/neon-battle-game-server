@@ -45,7 +45,11 @@ function createPlayerData(playerId, isBot = false) {
         canShootAuto: true,
         lastShootTime:0, // Время последнего выстрела
         canShotGun:true,
-        deathTime:0
+        deathTime:0,
+        energy: 100,
+        maxEnergy: 100,
+        lastShiftTime: 0,
+        lastShieldActivateTime: 0,
     };
 }
 
@@ -76,6 +80,9 @@ function respawnPlayer(playerId,state,walls,width_wall,height_wall,broadcast) {
     player.isShooting = false;
     player.velocityX = 0;
     player.velocityY = 0;
+    player.energy = player.maxEnergy;
+    player.lastShiftTime = 0;
+    player.lastShieldActivateTime = 0;
 
     const position = functions.getRandomPosition(player.radius, walls, width_wall, height_wall);
 

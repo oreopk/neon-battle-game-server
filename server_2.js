@@ -130,8 +130,14 @@ wss.on('connection', (ws) => {
         }
 
         if (data.type === 'shield' && player) {
-            if (currentState.activePlayers[data.playerid]) {
-                currentState.activePlayers[data.playerid].shieldActive = true;
+            const target = currentState.activePlayers[data.playerid];
+            if (target) {
+                const SHIELD_COOLDOWN_MS = 200;
+                const now = Date.now();
+                if (target.energy > 0 && now - target.lastShieldActivateTime >= SHIELD_COOLDOWN_MS) {
+                    target.shieldActive = true;
+                    target.lastShieldActivateTime = now;
+                }
             }
         }
 
@@ -176,12 +182,31 @@ wss.on('connection', (ws) => {
         }
 
         if (data.type === 'shift' && player) {
-            player.acceleration=10;
-            player.maxSpeed=60;
-            setTimeout(()=>{
-                player.acceleration=3;
-                player.maxSpeed=15}
-            , 90)
+            const SHIFT_COST = 30;
+            const SHIFT_COOLDOWN_MS = 300;
+            const now = Date.now();
+            if (player.energy >= SHIFT_COST && now - player.lastShiftTime >= SHIFT_COOLDOWN_MS) {
+                player.energy -= SHIFT_COST;
+                player.lastShiftTime = now;
+                player.acceleration = 10;
+                player.maxSpeed = 60;
+                // Угол шлейфа — противоположный направлению движения,
+                // чтобы частицы оставались позади игрока.
+                const moveAng = (player.velocityX !== 0 || player.velocityY !== 0)
+                    ? Math.atan2(player.velocityY, player.velocityX)
+                    : player.angle;
+                ws.currentLobby.broadcast(msgpack.encode({
+                    type: 'shift_effect',
+                    pid: playerId,
+                    x: Math.round(player.x),
+                    y: Math.round(player.y),
+                    ang: moveAng + Math.PI,
+                }));
+                setTimeout(() => {
+                    player.acceleration = 3;
+                    player.maxSpeed = 15;
+                }, 90);
+            }
         }
 
         if (data.type === 'shoot2' && player && player.balls_count >= 5) {

@@ -20,8 +20,11 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
                     broadcast(msgpack.encode({
                         type: 'removeBullet',
                         bid: bullet.bulletId,
+                        bx: bullet.x,
+                        by: bullet.y,
                         angle: bullet.angle,
                         ih: true,
+                        sh: true,
                     }));
                     state.bullets.splice(index, 1);
                     return true;
@@ -111,6 +114,29 @@ function checkCollisions(state, bullet, index, walls, broadcast) {
             const reflectX = dirX - 2 * dot * intersection.normal.x;
             const reflectY = dirY - 2 * dot * intersection.normal.y;
             const newAngle = Math.atan2(reflectY, reflectX);
+
+            // Рикошет при касательном (очень остром) ударе:
+            // |dot| мал → угол к нормали близок к 90° → почти параллельно стене.
+            const RICOCHET_DOT_THRESHOLD = 0.45;
+            const MAX_RICOCHETS = 2;
+            if (Math.abs(dot) < RICOCHET_DOT_THRESHOLD && (bullet.ricochets || 0) < MAX_RICOCHETS) {
+                const speed = Math.hypot(bullet.velocityX, bullet.velocityY) || 50;
+                bullet.angle = newAngle;
+                bullet.velocityX = reflectX * speed;
+                bullet.velocityY = reflectY * speed;
+                // Сдвигаем пулю чуть в сторону нормали, чтобы не зацепиться повторно
+                bullet.x = intersection.point.x + intersection.normal.x * (bullet.radius + 1);
+                bullet.y = intersection.point.y + intersection.normal.y * (bullet.radius + 1);
+                bullet.ricochets = (bullet.ricochets || 0) + 1;
+                broadcast(msgpack.encode({
+                    type: 'bulletRicochet',
+                    bid: bullet.bulletId,
+                    x: bullet.x,
+                    y: bullet.y,
+                    angle: bullet.angle,
+                }));
+                return false;
+            }
 
             state.bullets.splice(index, 1);
             broadcast(msgpack.encode({
