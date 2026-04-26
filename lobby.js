@@ -361,11 +361,11 @@ class Lobby {
         //  - вне паузы регенерируется ENERGY_REGEN_PER_TICK/тик.
         const SHIELD_APPEAR_DELAY_MS = 300;
         const ENERGY_DEPLETE_PAUSE_MS = 2000;
-        // 0.5/тик = ~31 энергии/сек. Цены оружия подобраны так, чтобы любое
+        // 1.2/тик ≈ 75 энергии/сек. Цены оружия подобраны так, чтобы любое
         // удержание огня давало чистый минус 25-70/сек и за 3-8 секунд
         // опустошало 200 энергии — иначе при ENERGY_REGEN > spend rate
         // шкала никогда не пустеет и пауза не срабатывает.
-        const ENERGY_REGEN_PER_TICK = 0.5;
+        const ENERGY_REGEN_PER_TICK = 1.2;
 
         if (player.energy <= 0 && !player.energyDepletedAt) {
           player.energyDepletedAt = Date.now();
@@ -384,8 +384,9 @@ class Lobby {
             }
           }
         } else if (!player.shieldActive && player.energy < player.maxEnergy) {
-          const inDepletePause = player.energyDepletedAt
-            && Date.now() - player.energyDepletedAt < ENERGY_DEPLETE_PAUSE_MS;
+          const inDepletePause =
+            player.energyDepletedAt &&
+            Date.now() - player.energyDepletedAt < ENERGY_DEPLETE_PAUSE_MS;
           if (!inDepletePause) {
             player.energy = Math.min(
               player.maxEnergy,
@@ -421,8 +422,8 @@ class Lobby {
               bc: p.balls_count, // balls_count
               bot: p.isBot, // isBot
               sA: p.shootAngle, // shootAngle
-              e: Math.round(p.energy),  // energy
-              me: p.maxEnergy ?? 200,   // maxEnergy (?? 200 — fallback на случай древних объектов)
+              e: Math.round(p.energy), // energy
+              me: p.maxEnergy ?? 200, // maxEnergy (?? 200 — fallback на случай древних объектов)
             },
           };
         },

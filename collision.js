@@ -70,7 +70,12 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
                     }));
                     delete state.activePlayers[id];
                     player.deathTime=Date.now();
-                    if (state.allPlayersLobby[id].isBot == true) {
+                    // Бот при смерти полностью удаляется из лобби (без респавна).
+                    // Раньше тут было прямое обращение к state.allPlayersLobby[id].isBot
+                    // без проверки — если запись уже удалена (например, игрок
+                    // успел выйти, либо вторая пуля попадает в тот же тик),
+                    // обращение к .isBot падало с TypeError и крашило сервер.
+                    if (state.allPlayersLobby[id] && state.allPlayersLobby[id].isBot === true) {
                         delete state.allPlayersLobby[id];
                     }
                 } else {

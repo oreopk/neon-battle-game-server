@@ -3,6 +3,20 @@ const control = require('./control.js');
 const msgpack = require('@msgpack/msgpack');
 const { WEAPONS } = require('./weapons.js');
 
+// Пул оружий, из которого боты берут ствол при создании.
+// Берём все ключи из WEAPONS — захочешь исключить какое-то (например shotgun
+// чтобы боты не лупили дробью), уберёшь его отсюда.
+const BOT_WEAPON_POOL = Object.keys(WEAPONS);
+function pickRandomWeaponName() {
+    return BOT_WEAPON_POOL[Math.floor(Math.random() * BOT_WEAPON_POOL.length)];
+}
+
+// Длина одной очереди стрельбы бота — 2..5 выстрелов подряд,
+// потом длинная передышка.
+function randomBurstSize() {
+    return 2 + Math.floor(Math.random() * 4);
+}
+
 function createPlayerData(playerId, isBot = false) {
     const radius = 25;
     let angle;
@@ -94,11 +108,21 @@ function respawnPlayer(playerId,state,walls,width_wall,height_wall,broadcast) {
     player.energyDepletedAt = null;
     player.lastShiftTime = 0;
     player.lastShieldActivateTime = 0;
+    // Сброс флагов поведения бота при респавне (на обычных игроков
+    // не влияет — поля просто остаются false/0).
+    player.waitingForEnergy = false;
+    player.shootPauseUntil = 0;
+    if (player.isBot) {
+        player.burstShotsLeft = randomBurstSize();
+    }
 
     const position = functions.getRandomPosition(player.radius, walls, width_wall, height_wall);
-
-    player.x = position.x;
-    player.y = position.y;
+    // getRandomPosition может вернуть null, если все слоты заняты —
+    // тогда оставляем игрока в его последней позиции, иначе .x/.y упадут с TypeError.
+    if (position) {
+        player.x = position.x;
+        player.y = position.y;
+    }
 
     state.activePlayers[playerId] = player;
     broadcast(msgpack.encode({
@@ -112,38 +136,90 @@ function add_bot(state, walls, width_wall, height_wall, lobby, lobbyManager) {
     const bot = addPlayer(state,playerId, true,walls,width_wall,height_wall);
     if (!bot) return;
     bot.lobbyId  = lobby.id;
+    // Случайное оружие при создании бота — каждый бот «пожизненно» носит свой ствол.
+    bot.botWeaponName = pickRandomWeaponName();
+    bot.currentShootMode = bot.botWeaponName;
+    // Состояние стрельбы бота:
+    //  waitingForEnergy — после полного опустошения шкалы бот ждёт пока
+    //  не наберёт хотя бы 50% (как просили), и только потом снова стреляет.
+    //  shootPauseUntil — случайные длинные «передышки» между очередями,
+    //  чтобы бот не палил равномерно как кулемёт.
+    bot.waitingForEnergy = false;
+    bot.shootPauseUntil = 0;
+    bot.burstShotsLeft = randomBurstSize();
+    bot.moveAngle = Math.random() * Math.PI * 2;
     bot.intervals = {
+        // ВАЖНО: НЕ объявлять внутри `const bot = ...` — иначе TDZ блокирует
+        // доступ к внешней `bot` через closure при clearInterval (TypeError
+        // 'Cannot access bot before initialization'). Используем `b` для
+        // текущего состояния из state.
         shooting: setInterval(() => {
-            if (state.activePlayers[playerId]) {
-                const bot = state.activePlayers[playerId];
-                bot.shootInterval = Math.random() * 100 + 1000;
-                const nearestEnemy = functions.findNearestEnemy(bot, state.activePlayers);
-                if (nearestEnemy) {
-                    turnBotShootTowardsEnemy(bot, nearestEnemy);
-                    const currentTime = Date.now();
-                    if (currentTime - bot.lastShotTime >= bot.shootInterval) {
-                        const currentLobby = lobbyManager.getLobby(bot.lobbyId)
-                        if (currentLobby) {
-                            control.shoot({
-                                player: bot,
-                                angle: bot.shootAngle,
-                                state,
-                                playerId,
-                                broadcast: (message) => currentLobby.broadcast(message),
-                                weapon: WEAPONS.pistol,
-                            });
-                        }
-                        bot.lastShotTime = currentTime;
-                    }
-                }
-            } else {
+            if (!state.activePlayers[playerId]) {
                 clearInterval(bot.intervals.shooting);
+                return;
+            }
+            const b = state.activePlayers[playerId];
+            const weapon = WEAPONS[b.botWeaponName] || WEAPONS.pistol;
+            const now = Date.now();
+
+            // Поворот корпуса бота на ближайшего врага — даже когда не стреляет
+            // (нет энергии, передышка и т.д.), чтобы спрайт всегда смотрел в цель.
+            const nearestEnemy = functions.findNearestEnemy(b, state.activePlayers);
+            if (nearestEnemy) {
+                turnBotShootTowardsEnemy(b, nearestEnemy);
+                b.angle = b.shootAngle;
+            }
+
+            // Ждём 50% энергии после полного опустошения.
+            if (b.waitingForEnergy) {
+                if (b.energy >= b.maxEnergy * 0.5) {
+                    b.waitingForEnergy = false;
+                } else {
+                    return;
+                }
+            }
+
+            // Длинная передышка между очередями.
+            if (now < b.shootPauseUntil) return;
+            if (!nearestEnemy) return;
+
+            // Внутри очереди интервал ≈ cooldown оружия + небольшой джиттер,
+            // чтобы стрельба выглядела как настоящая очередь, а не одиночные клики.
+            const burstInterval = weapon.cooldown + Math.random() * 80;
+            if (now - b.lastShotTime < burstInterval) return;
+
+            // Не хватает энергии на этот выстрел — уходим в режим ожидания.
+            if (b.energy < weapon.energyCost) {
+                b.waitingForEnergy = true;
+                return;
+            }
+
+            const currentLobby = lobbyManager.getLobby(b.lobbyId);
+            if (!currentLobby) return;
+
+            control.shoot({
+                player: b,
+                angle: b.shootAngle,
+                state,
+                playerId,
+                broadcast: (message) => currentLobby.broadcast(message),
+                weapon: weapon,
+            });
+            b.energy -= weapon.energyCost;
+            b.lastShotTime = now;
+
+            b.burstShotsLeft -= 1;
+            if (b.burstShotsLeft <= 0) {
+                // Очередь закончена — уходим в длинную передышку 0.8–2.5 сек,
+                // потом готовим новую очередь.
+                b.burstShotsLeft = randomBurstSize();
+                b.shootPauseUntil = now + (800 + Math.random() * 1700);
             }
         }, 100),
 
         movement: setInterval(() => {
             if (state.activePlayers[playerId]) {
-                state.activePlayers[playerId].angle = Math.random() * Math.PI * 2;
+                state.activePlayers[playerId].moveAngle = Math.random() * Math.PI * 2;
             } else {
                 clearInterval(bot.intervals.movement);
             }
@@ -160,27 +236,66 @@ function add_static_bot(state, walls, width_wall, height_wall, lobby, lobbyManag
     bot.velocityX = 0;
     bot.velocityY = 0;
     bot.acceleration = 0;
+    bot.botWeaponName = pickRandomWeaponName();
+    bot.currentShootMode = bot.botWeaponName;
+    bot.waitingForEnergy = false;
+    bot.shootPauseUntil = 0;
+    bot.burstShotsLeft = randomBurstSize();
     bot.intervals = {
+        // То же замечание что и в add_bot — внутреннюю переменную называем `b`,
+        // чтобы не попасть в TDZ для внешней `bot` при clearInterval.
         shooting: setInterval(() => {
-            if (state.activePlayers[playerId]) {
-                const bot = state.activePlayers[playerId];
-                const nearestEnemy = functions.findNearestEnemy(bot, state.activePlayers);
-                if (nearestEnemy) {
-                    turnBotShootTowardsEnemy(bot, nearestEnemy);
-                    const currentLobby = lobbyManager.getLobby(bot.lobbyId);
-                    if (currentLobby) {
-                        control.shoot({
-                            player: bot,
-                            angle: bot.shootAngle,
-                            state,
-                            playerId,
-                            broadcast: (message) => currentLobby.broadcast(message),
-                            weapon: WEAPONS.pistol,
-                        });
-                    }
-                }
-            } else {
+            if (!state.activePlayers[playerId]) {
                 clearInterval(bot.intervals.shooting);
+                return;
+            }
+            const b = state.activePlayers[playerId];
+            const weapon = WEAPONS[b.botWeaponName] || WEAPONS.pistol;
+            const now = Date.now();
+
+            const nearestEnemy = functions.findNearestEnemy(b, state.activePlayers);
+            if (nearestEnemy) {
+                turnBotShootTowardsEnemy(b, nearestEnemy);
+                b.angle = b.shootAngle;
+            }
+
+            if (b.waitingForEnergy) {
+                if (b.energy >= b.maxEnergy * 0.5) {
+                    b.waitingForEnergy = false;
+                } else {
+                    return;
+                }
+            }
+
+            if (now < b.shootPauseUntil) return;
+            if (!nearestEnemy) return;
+
+            const burstInterval = weapon.cooldown + Math.random() * 80;
+            if (now - b.lastShotTime < burstInterval) return;
+
+            if (b.energy < weapon.energyCost) {
+                b.waitingForEnergy = true;
+                return;
+            }
+
+            const currentLobby = lobbyManager.getLobby(b.lobbyId);
+            if (!currentLobby) return;
+
+            control.shoot({
+                player: b,
+                angle: b.shootAngle,
+                state,
+                playerId,
+                broadcast: (message) => currentLobby.broadcast(message),
+                weapon: weapon,
+            });
+            b.energy -= weapon.energyCost;
+            b.lastShotTime = now;
+
+            b.burstShotsLeft -= 1;
+            if (b.burstShotsLeft <= 0) {
+                b.burstShotsLeft = randomBurstSize();
+                b.shootPauseUntil = now + (800 + Math.random() * 1700);
             }
         }, 100)
         // движения нет — стоит на месте
@@ -206,8 +321,11 @@ function updateBots(state) {
         if (!bot.isBot) continue;
         if (bot.isStatic) continue; // статичный бот не двигается
 
-        bot.velocityX += Math.cos(bot.angle) * bot.acceleration;
-        bot.velocityY += Math.sin(bot.angle) * bot.acceleration;
+        // Движение бота — по moveAngle (рандомные блуждания), а angle оставляем
+        // под поворот корпуса в сторону врага (его выставляет интервал стрельбы).
+        const moveAngle = bot.moveAngle ?? bot.angle;
+        bot.velocityX += Math.cos(moveAngle) * bot.acceleration;
+        bot.velocityY += Math.sin(moveAngle) * bot.acceleration;
 
         const speed = Math.sqrt(bot.velocityX * bot.velocityX + bot.velocityY * bot.velocityY);
         if (speed > bot.maxSpeed) {
