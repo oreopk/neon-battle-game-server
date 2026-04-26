@@ -2,6 +2,7 @@ const functions = require('./functions.js');
 const collision = require('./collision.js');
 const objects = require('./objects.js');
 const walls_functions = require('./walls.js');
+const { WEAPONS } = require('./weapons.js');
 const msgpack = require('@msgpack/msgpack');
 const WebSocket = require('ws');
 
@@ -9,8 +10,12 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 
 class Lobby {
-  constructor(id, lobbyOwner, lobbyPassword = '') {
+  constructor(id, lobbyOwner, lobbyPassword = '', lobbyName = '') {
     this.id = id;
+    // Имя, введённое пользователем при создании. Если пусто — UI
+    // покажет техническое id ('lobby_5'). Раньше параметр lobbyName
+    // вообще не сохранялся — теперь хранится отдельно от id.
+    this.lobbyName = lobbyName || '';
     this.clients = new Set();
     this.maxPlayers = 8;
     this.state = {
@@ -28,6 +33,11 @@ class Lobby {
     this.walls = [];
     this.backgroundStars = [];
     this.initWalls();
+    // Снапшот стартового набора стен — чёрная дыра по ходу матча будет их
+    // съедать, и без бэкапа ресет матча оставлял бы поле без препятствий.
+    // Глубокий клон, чтобы мутации live-стен (включая F/X пользователя)
+    // не текли в снапшот.
+    this.initialWalls = JSON.parse(JSON.stringify(this.walls));
     this.startGameLoop();
     this.lobbyOwner = lobbyOwner;
     this.lobbyPassword = lobbyPassword;
@@ -91,8 +101,26 @@ class Lobby {
     }
   }
 
+  /**
+   * Точечный апдейт полей state. ВАЖНО: мутируем существующий объект через
+   * Object.assign, а не заменяем его новым `{...this.state, ...newState}`.
+   *
+   * Иначе все ссылки на старый state, захваченные в замыканиях, мгновенно
+   * протухают:
+   *   - `currentState` в WS-хендлерах server_2.js (захватывается при hello/
+   *     joinLobby/createLobby и больше не переустанавливается),
+   *   - `state` в setInterval'ах ботов (objects.add_bot/add_static_bot),
+   *   - всё, что когда-нибудь ещё придёт.
+   *
+   * После такой подмены любая мутация state.matchStartTime/.bullets/etc.
+   * на захваченной ссылке уходит в мусор, а реальное лобби живёт дальше
+   * со своим `this.state`. Ровно из-за этого после первого resetMatch
+   * переставала работать дебаг-кнопка +1min.
+   *
+   * Мутация in-place решает все такие баги разом.
+   */
   setState(newState) {
-    this.state = { ...this.state, ...newState };
+    Object.assign(this.state, newState);
   }
 
   broadcast(message) {
@@ -205,6 +233,7 @@ class Lobby {
         width: this.state.width_map,
         height: this.state.height_map,
         isReconnect: isReconnect,
+        weapons: WEAPONS,           // конфиг всех оружий — клиент строит таблицу динамически
       }),
     );
 
@@ -238,6 +267,32 @@ class Lobby {
     const maxDistanceY = 10000;
     let lastRespawnCheck = 0;
     let lastRemainingTime = -1;
+    let lastWallEatCheck = 0;
+
+    // Параметры чёрной дыры. Дыра «просыпается» когда до конца матча
+    // остаётся <= BLACKHOLE_WAKE_AT_REMAINING_MS, и линейно усиливается
+    // до strength=1 в момент, когда таймер достигает нуля.
+    // Бои идут 10 минут — последние 3 минуты превращаются в выживание
+    // подальше от центра, последняя минута уже почти не оставляет шансов.
+    const BLACKHOLE_WAKE_AT_REMAINING_MS = 3 * MINUTE;
+    const BLACKHOLE_EVENT_HORIZON_PLAYER = 90; // радиус «ядра» для игроков
+    const BLACKHOLE_EVENT_HORIZON_BULLET = 60; // ядро для пуль (меньше)
+    // Пули летят быстро (initial velocity > 100 у большинства оружий) и со
+    // скромной тягой пролетали мимо центра почти по прямой — игрок не видел,
+    // что дыра вообще на них действует. Тяга специально перекручена далеко
+    // выше реалистичной массы (×12.5 от player.pull), чтобы кривизна
+    // траектории была явной с любой дистанции. Swirl тоже усилен.
+    const BLACKHOLE_PULL_BULLET  = 20.0;       // ускорение/тик при strength=1
+    const BLACKHOLE_SWIRL_BULLET = 8.0;
+    const BLACKHOLE_PULL_PLAYER  = 1.6;
+    const BLACKHOLE_SWIRL_PLAYER = 0.55;
+    const BLACKHOLE_FALLOFF      = 1500;       // дистанция «полной» силы
+    // Радиус, в пределах которого стены полностью испаряются. Растёт
+    // линейно со strength: 0 → 0 px, 1 → 800 px. Граничные стены карты
+    // (id<0) не трогаем — иначе игроков выкидывает за пределы мира.
+    const BLACKHOLE_WALL_EAT_RADIUS_MAX = 800;
+    const BLACKHOLE_WALL_EAT_INTERVAL_MS = 500;
+
     setInterval(() => {
       if (!this.state.matchStartTime) {
         this.state.matchStartTime = Date.now();
@@ -259,9 +314,76 @@ class Lobby {
 
       objects.updateBots(this.state);
 
+      // Сила чёрной дыры на этом тике. Активна только в последние
+      // BLACKHOLE_WAKE_AT_REMAINING_MS до конца и только во время матча
+      // (между endMatch и resetMatch — спокойные 5 секунд).
+      const remainingMs = Math.max(0, this.state.matchDuration - elapsedTime);
+      const bhStrength =
+        !this.state.matchEnded && remainingMs < BLACKHOLE_WAKE_AT_REMAINING_MS
+          ? 1 - remainingMs / BLACKHOLE_WAKE_AT_REMAINING_MS
+          : 0;
+      const bhActive = bhStrength > 0;
+      const bhCx = this.state.width_map / 2;
+      const bhCy = this.state.height_map / 2;
+
+      // Чёрная дыра «жрёт» стены вокруг себя. Делаем не каждый тик —
+      // 500мс хватает, и сетевой трафик от updateWalls остаётся вменяемым.
+      // Радиус уничтожения = strength × MAX, поэтому первая стена пропадает
+      // только после того как дыра набрала ~10-15% силы (≈ 7:30 elapsed).
+      if (
+        bhActive &&
+        Date.now() - lastWallEatCheck >= BLACKHOLE_WALL_EAT_INTERVAL_MS
+      ) {
+        lastWallEatCheck = Date.now();
+        const eatRadius = bhStrength * BLACKHOLE_WALL_EAT_RADIUS_MAX;
+        const eatRadiusSq = eatRadius * eatRadius;
+        let removedAny = false;
+        for (let i = this.walls.length - 1; i >= 0; i--) {
+          const w = this.walls[i];
+          // Боковые границы карты (id < 0) не трогаем — на них держится мир.
+          if (w.id < 0) continue;
+          // Ближайшая точка прямоугольника стены к центру дыры — если она
+          // в радиусе eat, считаем что дыра «коснулась» стены и съедает её.
+          const closestX = Math.max(w.x, Math.min(bhCx, w.x + w.width));
+          const closestY = Math.max(w.y, Math.min(bhCy, w.y + w.height));
+          const dx = bhCx - closestX;
+          const dy = bhCy - closestY;
+          if (dx * dx + dy * dy <= eatRadiusSq) {
+            this.walls.splice(i, 1);
+            removedAny = true;
+          }
+        }
+        if (removedAny) {
+          this.broadcast(
+            msgpack.encode({
+              type: 'updateWalls',
+              walls: this.walls,
+            }),
+          );
+        }
+      }
+
       const bulletUpdates = [];
       for (let index = 0; index < this.state.bullets.length; index++) {
         const bullet = this.state.bullets[index];
+
+        // TTL — короткоживущие пули (ближний бой и т.п.) сами гаснут
+        // по истечении времени. Без этого пули с отрицательным acceleration
+        // зависают в нуле скорости и копятся вечно.
+        if (bullet.spawnTime && Date.now() - bullet.spawnTime >= bullet.lifetime) {
+          this.state.bullets.splice(index, 1);
+          this.broadcast(
+            msgpack.encode({
+              type: 'removeBullet',
+              bid: bullet.bulletId,
+              angle: bullet.angle,
+              ih: false,
+            }),
+          );
+          index--;
+          continue;
+        }
+
         bullet.velocityX += Math.cos(bullet.angle) * bullet.acceleration;
         bullet.velocityY += Math.sin(bullet.angle) * bullet.acceleration;
         const currentSpeed = Math.hypot(bullet.velocityX, bullet.velocityY);
@@ -270,6 +392,40 @@ class Lobby {
           const ratio = bullet.maxSpeed / currentSpeed;
           bullet.velocityX *= ratio;
           bullet.velocityY *= ratio;
+        }
+        // Пули с отрицательным acceleration не должны лететь назад: при
+        // достижении 0 их «толкает» в обратную сторону. Просто обнуляем.
+        if (bullet.acceleration < 0 && currentSpeed < 0.5) {
+          bullet.velocityX = 0;
+          bullet.velocityY = 0;
+        }
+
+        // Чёрная дыра подгребает пули к центру. Применяем ПОСЛЕ обычной
+        // тяги/maxSpeed-капа — так дыра реально может разогнать пулю
+        // быстрее её обычного maxSpeed (астрономически достоверно:
+        // гравитационный колодец ускоряет тело без верхнего предела).
+        if (bhActive) {
+          const dist = functions.applyBlackHole(bullet, bhCx, bhCy, bhStrength, {
+            pullForce:  BLACKHOLE_PULL_BULLET,
+            swirlForce: BLACKHOLE_SWIRL_BULLET,
+            falloffRef: BLACKHOLE_FALLOFF,
+          });
+          if (dist <= BLACKHOLE_EVENT_HORIZON_BULLET) {
+            this.state.bullets.splice(index, 1);
+            this.broadcast(
+              msgpack.encode({
+                type: 'removeBullet',
+                bid: bullet.bulletId,
+                bx: Math.round(bullet.x),
+                by: Math.round(bullet.y),
+                angle: bullet.angle,
+                ih: false,
+                bh: true, // съедено чёрной дырой — клиент может нарисовать вспышку
+              }),
+            );
+            index--;
+            continue;
+          }
         }
         if (
           collision.checkCollisions_bullet_player(
@@ -402,6 +558,23 @@ class Lobby {
         if (Math.abs(player.velocityX) < 0.01) player.velocityX = 0;
         if (Math.abs(player.velocityY) < 0.01) player.velocityY = 0;
 
+        // Дыра тянет игроков. Считаем ПОСЛЕ friction — иначе тяга мгновенно
+        // съедается трением и игрока почти не двигает. Также игнорируем щит:
+        // от гравитации он не спасает (по сюжету: масса > свет — какой щит).
+        if (bhActive) {
+          const dist = functions.applyBlackHole(player, bhCx, bhCy, bhStrength, {
+            pullForce:  BLACKHOLE_PULL_PLAYER,
+            swirlForce: BLACKHOLE_SWIRL_PLAYER,
+            falloffRef: BLACKHOLE_FALLOFF,
+          });
+          if (dist <= BLACKHOLE_EVENT_HORIZON_PLAYER + player.radius) {
+            this._killByBlackHole(id, player);
+            // удалили из activePlayers — итерация по for..in устойчива к
+            // удалению текущего ключа, но дальнейшую логику пропускаем.
+            continue;
+          }
+        }
+
         collision.checkWallCollisions(player, this.walls);
       }
 
@@ -438,6 +611,15 @@ class Lobby {
         updateMsg.rt = remaining; // rt = remainingTime
         lastRemainingTime = remaining;
       }
+      // Чёрная дыра. Шлём только когда активна — экономим трафик в первые
+      // 7 минут матча, когда дыры физически нет. Поля компактные: s/x/y.
+      if (bhActive) {
+        updateMsg.bh = {
+          s: Number(bhStrength.toFixed(3)), // strength
+          x: bhCx,
+          y: bhCy,
+        };
+      }
       this.broadcast(msgpack.encode(updateMsg));
       // this.broadcast(msgpack.encode({
       //     type: 'update',
@@ -445,6 +627,57 @@ class Lobby {
       //     remainingTime: Math.max(0, Math.floor((this.state.matchDuration - elapsedTime) / 1000))
       // }));
     }, 16);
+  }
+
+  /**
+   * Убивает игрока (или бота) от чёрной дыры. По сути — копия death-ветки
+   * из collision.js#checkCollisions_bullet_player, но без kill-кредита
+   * стрелку (это «environmental kill»). Шлём те же события смерти, чтобы
+   * клиент стандартно проиграл анимацию + поставил игрока в очередь респавна.
+   */
+  _killByBlackHole(playerId, player) {
+    let killed = 'none';
+    if (this.state.allPlayersLobby[playerId]) {
+      killed = this.state.allPlayersLobby[playerId].name || 'none';
+      this.state.allPlayersLobby[playerId].deaths++;
+    }
+
+    this.broadcast(
+      msgpack.encode({
+        type: 'playerDeath',
+        pid: playerId,
+        kd: killed,
+        kn: 'BLACK HOLE', // имя в kill-feed-е, чтобы было понятно кто «убил»
+        ba: 0,
+        bh: true,         // флаг: это смерть от дыры — клиент может усилить эффект
+      }),
+    );
+    this.broadcast(
+      msgpack.encode({
+        type: 'explosion_death',
+        x: player.x,
+        y: player.y,
+        angle: 0,
+        c: player.color,
+      }),
+    );
+    this.broadcast(
+      msgpack.encode({
+        type: 'removePlayer',
+        pid: playerId,
+      }),
+    );
+
+    delete this.state.activePlayers[playerId];
+    player.deathTime = Date.now();
+
+    // Бот не уважает респавн — удаляем полностью, как и при обычной смерти.
+    if (
+      this.state.allPlayersLobby[playerId] &&
+      this.state.allPlayersLobby[playerId].isBot === true
+    ) {
+      delete this.state.allPlayersLobby[playerId];
+    }
   }
 
   endMatch() {
@@ -511,6 +744,24 @@ class Lobby {
       matchEnded: false,
     });
 
+    // Восстанавливаем стены из снапшота (дыра по ходу матча их съела).
+    // Мутируем массив in-place — внешние ссылки на this.walls не должны
+    // протухать (например, в WS-хендлерах addWall/removeWall, в коллизиях).
+    // wallIdCounter тоже сдвигаем выше нового максимума, чтобы новые KeyF
+    // стены не получали id уже существующей.
+    this.walls.length = 0;
+    for (const w of this.initialWalls) {
+      this.walls.push({ ...w });
+    }
+    this.state.wallIdCounter =
+      this.walls.reduce((max, w) => Math.max(max, w.id), -1) + 1;
+    this.broadcast(
+      msgpack.encode({
+        type: 'updateWalls',
+        walls: this.walls,
+      }),
+    );
+
     objects.check_new_player(this.state, (msg) => this.broadcast(msg));
 
     this.broadcast(
@@ -530,63 +781,75 @@ class LobbyManager {
 
   createLobby(lobbyName, lobbyOwner = '', lobbyPassword = '') {
     const lobbyID = `lobby_${this.lobbyCounter++}`;
-    const newLobby = new Lobby(lobbyID, lobbyOwner, lobbyPassword);
+    const newLobby = new Lobby(lobbyID, lobbyOwner, lobbyPassword || '', lobbyName || '');
     this.lobbies.set(lobbyID, newLobby);
     console.log('Создано лобби:', {
       id: newLobby.id,
+      name: newLobby.lobbyName,
       playersCount: newLobby.clients.size,
       maxPlayers: newLobby.maxPlayers,
       lobbyOwner: newLobby.lobbyOwner,
-      hasPassword: lobbyPassword,
+      hasPassword: !!lobbyPassword,
     });
     return newLobby;
   }
 
-  getLobby(id, lobbyPassword) {
-    if (id) {
-      const lobby = this.lobbies.get(id);
-      if (
-        lobby &&
-        lobby.clients.size < lobby.maxPlayers &&
-        !lobby.lobbyPassword
-      ) {
-        console.log(`Лобби ${id} найдено и имеет свободные места`);
-        return lobby;
-      } else if (lobby.lobbyPassword) {
-        if (lobby.lobbyPassword === lobbyPassword) {
-          return lobby;
-        }
-      }
-      console.log(lobby.lobbyPassword);
-      console.log(lobbyPassword);
+  /**
+   * Получить лобби по id. Чистая функция: если лобби нет, возвращает null
+   * и НЕ создаёт ничего нового. Раньше при промахе создавалось мусорное
+   * лобби, что плодило фантомные записи.
+   */
+  getLobby(id) {
+    if (!id) return null;
+    return this.lobbies.get(id) || null;
+  }
 
-      console.log(`Лобби ${id} либо не существует, либо заполнено`);
-      return null;
-    }
+  /**
+   * Можно ли войти в лобби с этим паролем. Открытые лобби — всегда да.
+   */
+  canJoinLobby(id, lobbyPassword) {
+    const lobby = this.getLobby(id);
+    if (!lobby) return false;
+    if (lobby.clients.size >= lobby.maxPlayers) return false;
+    if (lobby.lobbyPassword && lobby.lobbyPassword !== lobbyPassword) return false;
+    return true;
+  }
 
+  /**
+   * Найти первое открытое лобби (без пароля и со свободным местом),
+   * или вернуть null. Используется при подключении нового игрока.
+   * Если совсем ничего нет — вызывающий код решит что делать (например,
+   * упасть в lobby_0).
+   */
+  findOpenLobby() {
     for (const lobby of this.lobbies.values()) {
       if (lobby.clients.size < lobby.maxPlayers && !lobby.lobbyPassword) {
-        console.log('найдено свободное лобби: ' + lobby);
         return lobby;
-      } else {
-        console.log('не найдено свободного лобби: ');
       }
     }
-
-    return this.createLobby(`lobby_${this.lobbyCounter}`, '');
+    return null;
   }
 
   getLobbiesInfo() {
     return Array.from(this.lobbies.values()).map((lobby) => ({
       id: lobby.id,
+      name: lobby.lobbyName || '',
       playersCount: lobby.clients.size,
       lobbyOwner: lobby.lobbyOwner,
       hasPassword: !!lobby.lobbyPassword,
     }));
   }
 
+  /**
+   * Дефолтное лобби — всегда `lobby_0`. Раньше брался первый по порядку
+   * элемент Map, что в worst-case могло быть удаляемым лобби.
+   */
+  getDefaultLobby() {
+    return this.lobbies.get('lobby_0') || null;
+  }
+
   moveToDefaultLobby(client) {
-    const defaultLobby = this.lobbies.values().next().value;
+    const defaultLobby = this.getDefaultLobby();
     if (defaultLobby) {
       defaultLobby.addClient(client, client.playerId);
     }
@@ -594,13 +857,14 @@ class LobbyManager {
 
   removeLobby(id) {
     const lobby = this.lobbies.get(id);
-    if (lobby) {
-      lobby.clients.forEach((client) => {
-        this.moveToDefaultLobby(client);
-      });
-      return this.lobbies.delete(id);
-    }
-    return false;
+    if (!lobby) return false;
+    // Удаляем из Map ДО переезда клиентов — иначе moveToDefaultLobby
+    // может в worst-case взять то же самое удаляемое лобби.
+    this.lobbies.delete(id);
+    lobby.clients.forEach((client) => {
+      this.moveToDefaultLobby(client);
+    });
+    return true;
   }
 }
 

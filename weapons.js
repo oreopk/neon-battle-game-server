@@ -17,16 +17,23 @@
  */
 const WEAPONS = {
   pistol: {
-    bulletCount: 1,
-    speed: 90,
-    damage: 35,
-    minSpread: 0,
-    maxSpread: 0,
+    // Чисто ближний бой — никаких пуль. Только AoE удар по дуге ~150°
+    // вокруг игрока: сервер находит всех в пределах meleeRadius и в полу-
+    // угле minSpread от направления взгляда, наносит damage за один свинг.
+    // Клиент рисует расширяющееся полукольцо (shockwave), визуального трейла
+    // и пуль нет.
+    bulletCount: 0,
+    speed: 0,
+    damage: 40,
+    minSpread: 1.3,           // 1.3 рад ≈ 75° полу-угол → ~150° полная дуга
+    maxSpread: 1.3,
     sideOffset: 0,
-    forwardOffset: 50,
-    cooldown: 200,
+    forwardOffset: 0,
+    cooldown: 700,
     abilityProperty: 'canShootPistol',
-    energyCost: 12,
+    energyCost: 30,
+    isMelee: true,
+    meleeRadius: 150,         // дальность удара (px) — короткая
   },
   shotgun: {
     bulletCount: 5,

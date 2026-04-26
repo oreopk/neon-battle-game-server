@@ -18,7 +18,7 @@ function applyAttraction(object, width, height) {
     const directionX = dx / distance;
     const directionY = dy / distance;
 
-    let attractionForce = (attractionStrength / distance); 
+    let attractionForce = (attractionStrength / distance);
     attractionForce = Math.max(attractionForce, minAttractionForce);
     attractionForce = Math.min(attractionForce, maxAttractionForce);
 
@@ -26,6 +26,45 @@ function applyAttraction(object, width, height) {
         object.velocityX += directionX *attractionForce;
         object.velocityY += directionY *attractionForce;
     }
+}
+
+/**
+ * Чёрная дыра: радиальное притяжение + тангенциальная закрутка.
+ * Изменяет object.velocityX/Y inplace. Возвращает дистанцию до центра —
+ * caller использует её, чтобы решить «пора уничтожить».
+ *
+ *   strength    — 0..1, сила в этот тик (домножается на pullForce/swirlForce)
+ *   pullForce   — макс радиальное ускорение к центру при strength=1
+ *   swirlForce  — макс тангенциальное ускорение при strength=1
+ *   falloffRef  — расстояние, на котором сила = pullForce (ближе → сильнее по 1/r)
+ *
+ * Закручиваем по часовой (tx = dy/dist, ty = -dx/dist) — приятно совпадает
+ * с уже вращающимся 3D-аккреционным диском в front/3d_graphics.js.
+ */
+function applyBlackHole(object, cx, cy, strength, opts = {}) {
+    const pullForce  = opts.pullForce  ?? 1.5;
+    const swirlForce = opts.swirlForce ?? 0.6;
+    const falloffRef = opts.falloffRef ?? 1200;
+
+    const dx = cx - object.x;
+    const dy = cy - object.y;
+    const dist = Math.hypot(dx, dy) || 0.0001;
+
+    // 1/r-затухание, кэп на 1 чтобы вблизи не было бесконечного импульса.
+    const falloff = Math.min(1.5, falloffRef / dist);
+    const f = pullForce  * strength * falloff;
+    const s = swirlForce * strength * falloff;
+
+    const nx = dx / dist;
+    const ny = dy / dist;
+    // тангент (по часовой стрелке относительно вектора к центру)
+    const tx =  dy / dist;
+    const ty = -dx / dist;
+
+    object.velocityX += nx * f + tx * s;
+    object.velocityY += ny * f + ty * s;
+
+    return dist;
 }
 
 function findNearestEnemy(bot,activePlayers) {
@@ -169,6 +208,7 @@ function generatePerlinNoiseStars(width, height, Count, minSize, maxSize) {
 module.exports = {
     makePlayersObservable,
     applyAttraction,
+    applyBlackHole,
     findNearestEnemy,
     getRandomPosition,
     generatePerlinNoiseStars
