@@ -2,8 +2,12 @@ const physics = require('./physics.js');
 const msgpack = require('@msgpack/msgpack');
 
 function checkCollisions_bullet_player(state, bullet, index, broadcast) {
-        const startX = bullet.x - bullet.velocityX;
-        const startY = bullet.y - bullet.velocityY;
+        // Используем реальную предыдущую позицию (prevX/prevY), а не
+        // x - velocity. На первом тике после спавна prev == current →
+        // сегмент нулевой длины, что корректно: проверяется только сама
+        // точка вылета, а не фейковый «трек назад» на длину velocity.
+        const startX = bullet.prevX ?? (bullet.x - bullet.velocityX);
+        const startY = bullet.prevY ?? (bullet.y - bullet.velocityY);
         const endX = bullet.x;
         const endY = bullet.y;
         for (const id in state.activePlayers) {
@@ -100,8 +104,11 @@ function checkCollisions_bullet_player(state, bullet, index, broadcast) {
 }
 
 function checkCollisions(state, bullet, index, walls, broadcast) {
-    const startX = bullet.x - bullet.velocityX;
-    const startY = bullet.y - bullet.velocityY;
+    // См. комментарий выше — используем prevX/prevY чтобы первый тик
+    // проверял только спавн-точку, а не уходил сегментом назад через
+    // стену за спиной стрелка.
+    const startX = bullet.prevX ?? (bullet.x - bullet.velocityX);
+    const startY = bullet.prevY ?? (bullet.y - bullet.velocityY);
     const endX = bullet.x;
     const endY = bullet.y;
     for (let j = walls.length - 1; j >= 0; j--) {
@@ -127,6 +134,11 @@ function checkCollisions(state, bullet, index, walls, broadcast) {
                 // Сдвигаем пулю чуть в сторону нормали, чтобы не зацепиться повторно
                 bullet.x = intersection.point.x + intersection.normal.x * (bullet.radius + 1);
                 bullet.y = intersection.point.y + intersection.normal.y * (bullet.radius + 1);
+                // После телепорта в точку отскока prev должен совпадать с текущей,
+                // иначе на следующем тике сегмент (prev → next) пройдёт назад
+                // через стену и пуля «попадёт» в неё повторно.
+                bullet.prevX = bullet.x;
+                bullet.prevY = bullet.y;
                 bullet.ricochets = (bullet.ricochets || 0) + 1;
                 broadcast(msgpack.encode({
                     type: 'bulletRicochet',

@@ -294,6 +294,11 @@ class Lobby {
           continue;
         }
 
+        // Сохраняем текущую позицию как «предыдущую» ПЕРЕД сдвигом —
+        // в следующем тике коллизии будут проверять реальный отрезок
+        // (prev → next), а не reconstr через velocity.
+        bullet.prevX = bullet.x;
+        bullet.prevY = bullet.y;
         bullet.x += bullet.velocityX;
         bullet.y += bullet.velocityY;
 

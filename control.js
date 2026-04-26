@@ -69,6 +69,13 @@ function shoot({ player, angle, state, playerId, broadcast, weapon }) {
             bulletId: state.bulletCounter++,
             x: bulletX,
             y: bulletY,
+            // prevX/prevY — реальная предыдущая позиция пули. На спавне совпадает
+            // с x/y, чтобы первый тик коллизий проверял лишь точку спавна,
+            // а не «фантомный» сегмент назад на длину velocity (иначе пуля
+            // могла «попасть» в стену ЗА спиной игрока, через которую сегмент
+            // дотянулся бы при подходе вплотную).
+            prevX: bulletX,
+            prevY: bulletY,
             angle: bulletAngle,
             radius: bulletRadius,
             speed: weapon.speed,
