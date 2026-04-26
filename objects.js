@@ -45,6 +45,7 @@ function createPlayerData(playerId, isBot = false) {
         canShootAuto: true,
         lastShootTime:0, // Время последнего выстрела
         canShotGun:true,
+        canShootOrbital: true,
         deathTime:0,
         energy: 100,
         maxEnergy: 100,

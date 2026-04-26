@@ -230,18 +230,38 @@ wss.on('connection', (ws) => {
 
         if (data.type === 'shoot3' && player && player.balls_count > 0) {
             control.shoot(
-                player, 
-                data.angle, 
-                currentState, 
-                playerId, 
-                (message) => ws.currentLobby.broadcast(message), 
+                player,
+                data.angle,
+                currentState,
+                playerId,
+                (message) => ws.currentLobby.broadcast(message),
                 1,
                 150,
                 0.2,
-                30,
-                100,
+                18,    // sideOffset — соответствует дулу drawAutoGun (Y=18)
+                130,   // forwardOffset — соответствует дулу drawAutoGun (X=130)
                 100,
                 "canShootAuto",
+                data,
+                true
+            );
+        }
+
+        if (data.type === 'shoot4' && player && player.balls_count > 0) {
+            // Orbital — точная и быстрая стрельба, пуля вылетает из центра орбиты
+            control.shoot(
+                player,
+                data.angle,
+                currentState,
+                playerId,
+                (message) => ws.currentLobby.broadcast(message),
+                1,
+                180,   // speed
+                0.05,  // maxSpread (почти идеально точно)
+                0,     // sideOffset
+                70,    // forwardOffset — соответствует центру drawOrbital
+                90,    // shootCooldown
+                "canShootOrbital",
                 data,
                 true
             );

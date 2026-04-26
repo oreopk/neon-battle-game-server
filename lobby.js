@@ -135,7 +135,7 @@ class Lobby {
       ...walls_functions.generateRandomWalls(
         this.state.width_map,
         this.state.height_map,
-        40,
+        200,
       ),
     );
     // wallIdCounter должен начинаться выше максимального ID сгенерированных стен,
