@@ -1,6 +1,7 @@
 const functions = require('./functions.js');
 const control = require('./control.js');
 const msgpack = require('@msgpack/msgpack');
+const { WEAPONS } = require('./weapons.js');
 
 function createPlayerData(playerId, isBot = false) {
     const radius = 25;
@@ -33,22 +34,31 @@ function createPlayerData(playerId, isBot = false) {
         friction: 0.98,
         lastShotTime: 0,
         shootInterval: isBot ? 2000 : null,
-        balls_count: 500,
-        reload: 0,
-        balls_max_count: 25,
+        // balls_count — визуальный индикатор HP в шариках вокруг игрока.
+        // Полное HP = balls_max_count шариков, каждое попадание уменьшает.
+        balls_count: 10,
+        balls_max_count: 10,
         shieldActive: false,
         kills: 0,
         deaths: 0,
         isShooting:false,
-        currentShootMode:'shoot1',
-        shield_on:false, // пока не используется на беке
-        canShootAuto: true,
-        lastShootTime:0, // Время последнего выстрела
-        canShotGun:true,
+        currentShootMode: 'pistol',
+        shield_on: false, // пока не используется на беке
+        lastShootTime: 0, // Время последнего выстрела
+        // Флаги «можно стрелять» по каждому оружию — выставляются в false
+        // на момент анимации/кулдауна и обратно в true когда оружие готово.
+        canShootPistol: true,
+        canShootShotgun: true,
+        canShootRifle: true,
         canShootOrbital: true,
+        canShootSpiral: true,
+        canShootVortex: true,
+        canShootStarburst: true,
+        canShootCrystal: true,
+        canShootSwarm: true,
         deathTime:0,
-        energy: 100,
-        maxEnergy: 100,
+        energy: 200,
+        maxEnergy: 200,
         lastShiftTime: 0,
         lastShieldActivateTime: 0,
     };
@@ -76,12 +86,12 @@ function respawnPlayer(playerId,state,walls,width_wall,height_wall,broadcast) {
 
     player.health = 100;
     player.balls_count = player.balls_max_count;
-    player.reload = 0;
     player.shieldActive = false;
     player.isShooting = false;
     player.velocityX = 0;
     player.velocityY = 0;
     player.energy = player.maxEnergy;
+    player.energyDepletedAt = null;
     player.lastShiftTime = 0;
     player.lastShieldActivateTime = 0;
 
@@ -114,7 +124,14 @@ function add_bot(state, walls, width_wall, height_wall, lobby, lobbyManager) {
                     if (currentTime - bot.lastShotTime >= bot.shootInterval) {
                         const currentLobby = lobbyManager.getLobby(bot.lobbyId)
                         if (currentLobby) {
-                            control.shoot(bot,bot.shootAngle,state,playerId,(message)=>currentLobby.broadcast(message), bullet_count=1, 100, 0, 10, 10,1,false);
+                            control.shoot({
+                                player: bot,
+                                angle: bot.shootAngle,
+                                state,
+                                playerId,
+                                broadcast: (message) => currentLobby.broadcast(message),
+                                weapon: WEAPONS.pistol,
+                            });
                         }
                         bot.lastShotTime = currentTime;
                     }
@@ -152,7 +169,14 @@ function add_static_bot(state, walls, width_wall, height_wall, lobby, lobbyManag
                     turnBotShootTowardsEnemy(bot, nearestEnemy);
                     const currentLobby = lobbyManager.getLobby(bot.lobbyId);
                     if (currentLobby) {
-                        control.shoot(bot, bot.shootAngle, state, playerId, (message) => currentLobby.broadcast(message), 1, 100, 0, 10, 10, 800, false);
+                        control.shoot({
+                            player: bot,
+                            angle: bot.shootAngle,
+                            state,
+                            playerId,
+                            broadcast: (message) => currentLobby.broadcast(message),
+                            weapon: WEAPONS.pistol,
+                        });
                     }
                 }
             } else {

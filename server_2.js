@@ -2,13 +2,15 @@ const connect = require('./connect.js');
 const objects = require('./objects.js');
 const control = require('./control.js');
 const msgpack = require('@msgpack/msgpack');
-const {LobbyManager } = require('./lobby.js');
+const { LobbyManager } = require('./lobby.js');
+const { WEAPONS } = require('./weapons.js');
 
 const wss = connect.wss;
 const PORT = 8081;
 
 connect.server.listen(PORT, '0.0.0.0', () => {
     console.log(`Сервер запущен на http://localhost:${PORT}`);
+    console.log('[BUILD] energy v2 (maxEnergy=200, me-field, deplete-pause)');
 });
 
 const lobbyManager = new LobbyManager();
@@ -177,8 +179,33 @@ wss.on('connection', (ws) => {
             objects.check_new_player(currentState, (msg) => ws.currentLobby.broadcast(msg));
         }
 
-        if (data.type === 'shoot' && player && player.balls_count > 0) {
-
+        // Единая точка входа для всех видов оружия. Клиент шлёт
+        // { type: 'shoot', weapon: 'pistol' | 'shotgun' | ..., angle }
+        // Стрельба тратит энергию (та же что у щита/шифта).
+        // Пауза при опустошении триггерится в lobby.js при energy<=0,
+        // здесь блокированные выстрелы НЕ перезапускают паузу — иначе
+        // удержание кнопки замораживает регенерацию.
+        if (data.type === 'shoot' && player) {
+            const weapon = WEAPONS[data.weapon];
+            // Проверяем И энергию И кулдаун ДО списания.
+            // Без проверки кулдауна каждый shoot-msg между cooldown-окнами
+            // (а их 50+ за 800мс при held fire) сжирал энергию вхолостую.
+            const now = Date.now();
+            if (
+                weapon
+                && player.energy >= weapon.energyCost
+                && now - player.lastShootTime >= weapon.cooldown
+            ) {
+                player.energy -= weapon.energyCost;
+                control.shoot({
+                    player,
+                    angle: data.angle,
+                    state: currentState,
+                    playerId,
+                    broadcast: (message) => ws.currentLobby.broadcast(message),
+                    weapon,
+                });
+            }
         }
 
         if (data.type === 'shift' && player) {
@@ -207,64 +234,6 @@ wss.on('connection', (ws) => {
                     player.maxSpeed = 15;
                 }, 90);
             }
-        }
-
-        if (data.type === 'shoot2' && player && player.balls_count >= 5) {
-            control.shoot(
-                player, 
-                data.angle, 
-                currentState, 
-                playerId, 
-                (message) => ws.currentLobby.broadcast(message), 
-                5,
-                50,
-                0.2,
-                20,
-                100,
-                800,
-                "canShotGun",
-                data,
-                false
-            );
-        }
-
-        if (data.type === 'shoot3' && player && player.balls_count > 0) {
-            control.shoot(
-                player,
-                data.angle,
-                currentState,
-                playerId,
-                (message) => ws.currentLobby.broadcast(message),
-                1,
-                150,
-                0.2,
-                18,    // sideOffset — соответствует дулу drawAutoGun (Y=18)
-                130,   // forwardOffset — соответствует дулу drawAutoGun (X=130)
-                100,
-                "canShootAuto",
-                data,
-                true
-            );
-        }
-
-        if (data.type === 'shoot4' && player && player.balls_count > 0) {
-            // Orbital — точная и быстрая стрельба, пуля вылетает из центра орбиты
-            control.shoot(
-                player,
-                data.angle,
-                currentState,
-                playerId,
-                (message) => ws.currentLobby.broadcast(message),
-                1,
-                180,   // speed
-                0.05,  // maxSpread (почти идеально точно)
-                0,     // sideOffset
-                70,    // forwardOffset — соответствует центру drawOrbital
-                90,    // shootCooldown
-                "canShootOrbital",
-                data,
-                true
-            );
         }
 
         if (data.type === 'angle' && player) {

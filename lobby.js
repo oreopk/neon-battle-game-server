@@ -341,17 +341,31 @@ class Lobby {
         const player = this.state.activePlayers[id];
         //functions.applyAttraction(player, 4000, 4000);
 
-        if (player.balls_count < player.balls_max_count) {
-          player.reload += 0.1;
-          if (player.reload > 1) {
-            player.balls_count += 1;
-            player.reload = 0;
-          }
+        // balls_count теперь визуальный индикатор HP в долях от max.
+        // Клиент рисует столько шариков, сколько осталось HP (0..max).
+        player.balls_count = Math.max(
+          0,
+          Math.round((player.health / 100) * player.balls_max_count),
+        );
+
+        // Энергия:
+        //  - щит быстро дренит (после задержки появления),
+        //  - стрельба/шифт списывают энергию централизованно в server_2.js,
+        //  - при достижении 0 наступает пауза ENERGY_DEPLETE_PAUSE_MS,
+        //    в которой регенерация остановлена,
+        //  - вне паузы регенерируется ENERGY_REGEN_PER_TICK/тик.
+        const SHIELD_APPEAR_DELAY_MS = 300;
+        const ENERGY_DEPLETE_PAUSE_MS = 2000;
+        // 0.5/тик = ~31 энергии/сек. Цены оружия подобраны так, чтобы любое
+        // удержание огня давало чистый минус 25-70/сек и за 3-8 секунд
+        // опустошало 200 энергии — иначе при ENERGY_REGEN > spend rate
+        // шкала никогда не пустеет и пауза не срабатывает.
+        const ENERGY_REGEN_PER_TICK = 0.5;
+
+        if (player.energy <= 0 && !player.energyDepletedAt) {
+          player.energyDepletedAt = Date.now();
         }
 
-        // Энергия: щит быстро дренит (после задержки появления),
-        // иначе медленная регенерация.
-        const SHIELD_APPEAR_DELAY_MS = 300;
         if (
           player.shieldActive &&
           Date.now() - player.lastShieldActivateTime >= SHIELD_APPEAR_DELAY_MS
@@ -360,9 +374,20 @@ class Lobby {
           if (player.energy <= 0) {
             player.energy = 0;
             player.shieldActive = false;
+            if (!player.energyDepletedAt) {
+              player.energyDepletedAt = Date.now();
+            }
           }
         } else if (!player.shieldActive && player.energy < player.maxEnergy) {
-          player.energy = Math.min(player.maxEnergy, player.energy + 0.5);
+          const inDepletePause = player.energyDepletedAt
+            && Date.now() - player.energyDepletedAt < ENERGY_DEPLETE_PAUSE_MS;
+          if (!inDepletePause) {
+            player.energy = Math.min(
+              player.maxEnergy,
+              player.energy + ENERGY_REGEN_PER_TICK,
+            );
+            if (player.energy > 0) player.energyDepletedAt = null;
+          }
         }
 
         player.velocityX *= player.friction;
@@ -391,7 +416,8 @@ class Lobby {
               bc: p.balls_count, // balls_count
               bot: p.isBot, // isBot
               sA: p.shootAngle, // shootAngle
-              e: Math.round(p.energy), // energy
+              e: Math.round(p.energy),  // energy
+              me: p.maxEnergy ?? 200,   // maxEnergy (?? 200 — fallback на случай древних объектов)
             },
           };
         },
